@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """
+"""
 AI code review script used by GitHub Actions PR Review workflow.
-Optimized for Speed: Parallel processing & Category-based review.
+Optimized for Speed: Parallel processing & Gemini 404 Fix.
 """
 import json
 import os
 import subprocess
 import traceback
 import concurrent.futures
+import litellm
 
 MAX_DIFF_LENGTH = 18000
-# 限制最大并发数，避免 API 限流或 GitHub Action 资源耗尽
-MAX_WORKERS = 3 
+# 限制最大并发数，8只股票建议设为 3-4
+MAX_WORKERS = 4 
 
 REVIEW_PATHS = [
     '*.py', '*.md', 'README.md', 'AGENTS.md', 'docs/**',
@@ -51,16 +53,15 @@ def classify_files(files):
     return py_files, doc_files, frontend_files, others
 
 def build_prompt(diff_content, files, pr_title, pr_body, category_name):
-    """构建针对特定类别的 Prompt"""
     return f"""你是仓库 PR 审查助手。正在进行【{category_name}】专项审查。
-
 ## PR 信息
 - 标题: {pr_title or '(empty)'}
 - 描述: {pr_body or '(empty)'}
-
-## 待审文件列表
+## 待审文件
 {', '.join(files)}
-
+## 代码变更 (diff)
+```diff
+{diff_content[:MAX_DIFF_LENGTH]}
 ## 代码变更 (diff)
 ```diff
 {diff_content[:MAX_DIFF_LENGTH]}
