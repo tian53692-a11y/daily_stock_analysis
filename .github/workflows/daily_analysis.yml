@@ -257,3 +257,13 @@ jobs:
             echo "📜 最近日志（最后 30 行）:"
             tail -30 logs/stock_analysis_*.log 2>/dev/null || echo "无日志"
           fi
+          # 前面的步骤保持不变（如分析、保存报告等）...
+
+      - name: Run Sniper Alert
+        env:
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+        run: |
+          # 确保安装了 sniper 依赖
+          pip install akshare pandas requests
+          # 运行狙击脚本
+          python src/sniper.py
