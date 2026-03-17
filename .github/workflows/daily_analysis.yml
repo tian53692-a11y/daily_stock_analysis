@@ -61,6 +61,11 @@ jobs:
           # ==========================================
           # AI 配置
           # ==========================================
+          # DeepSeek 配置 (手动补上这一段)
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          LITELLM_MODEL: "deepseek/deepseek-reasoner"
+          DEEPSEEK_API_BASE: "https://api.deepseek.com"
+          DEEPSEEK_THINKING: "true"
           # Gemini AI（主选）
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL || secrets.GEMINI_MODEL || 'gemini-3-flash-preview' }}
