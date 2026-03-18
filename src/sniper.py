@@ -3,124 +3,76 @@ import time
 import base64
 import io
 import random
-import functools
 import requests
 import pandas as pd
-import pandas_ta as ta
 import mplfinance as mpf
 import akshare as ak
 from datetime import datetime
 
-# ==========================================
-# 1. 自动重试装饰器 (处理 RemoteDisconnected)
-# ==========================================
-def retry_on_failure(max_retries=3, base_delay=2):
-    def decorator(func):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            retries = 0
-            while retries < max_retries:
-                try:
-                    return func(*args, **kwargs)
-                except Exception as e:
-                    retries += 1
-                    # 只有最后一次失败才真正抛出异常
-                    if retries == max_retries:
-                        print(f"❌ {func.__name__} 最终失败: {e}")
-                        raise e
-                    # 指数退避：等待时间随次数增加 (2s, 4s, 8s...)
-                    wait_time = base_delay * (2 ** (retries - 1)) + random.uniform(0, 1)
-                    print(f"⚠️ {func.__name__} 报错，{wait_time:.1f}秒后进行第 {retries} 次重试...")
-                    time.sleep(wait_time)
-            return None
-        return wrapper
-    return decorator
-
-# ==========================================
-# 2. 带重试的数据获取
-# ==========================================
-@retry_on_failure(max_retries=5)
-def get_stock_data(stock_code):
-    # 模拟稍微长一点的请求，增加稳定性
-    df = ak.stock_zh_a_hist(symbol=stock_code, period="daily", adjust="hfq").tail(60)
-    if df.empty:
-        return None
-    
-    # 转换格式以适配 mplfinance
+# 获取数据并绘图
+def get_data_and_plot(code, name):
+    # 1. 获取 60 天数据（多取一点数据方便算均线）
+    df = ak.stock_zh_a_hist(symbol=code, period="daily", adjust="hfq").tail(60)
     df['date'] = pd.to_datetime(df['日期'])
     df = df.set_index('date')
     df = df.rename(columns={'开盘':'Open','最高':'High','最低':'Low','收盘':'Close','成交量':'Volume'})
     
-    # 使用 Pandas-TA 增加指标
-    df.ta.sma(length=5, append=True)
-    df.ta.sma(length=10, append=True)
-    df.ta.sma(length=20, append=True)
-    return df
-
-# ==========================================
-# 3. 生成 K 线图 Base64
-# ==========================================
-def generate_kline_img(df, name):
-    plot_df = df.tail(25) # 只画最近25天
+    # 2. 原生 Pandas 计算均线（不再需要 pandas-ta）
+    df['MA5'] = df['Close'].rolling(window=5).mean()
+    df['MA10'] = df['Close'].rolling(window=10).mean()
+    df['MA20'] = df['Close'].rolling(window=20).mean()
     
-    # 准备指标线
+    # 3. 截取最近 20 天展示
+    plot_df = df.tail(20)
+    
+    # 4. 配置均线层
     apd = [
-        mpf.make_addplot(plot_df['SMA_5'], color='blue', width=0.8),
-        mpf.make_addplot(plot_df['SMA_10'], color='orange', width=0.8),
-        mpf.make_addplot(plot_df['SMA_20'], color='green', width=0.8)
+        mpf.make_addplot(plot_df['MA5'], color='blue', width=0.8),
+        mpf.make_addplot(plot_df['MA10'], color='orange', width=0.8),
+        mpf.make_addplot(plot_df['MA20'], color='green', width=0.8)
     ]
     
-    # 在内存中绘图
+    # 5. 生成图片
     buf = io.BytesIO()
-    style = mpf.make_mpf_style(base_mpf_style='nightclouds', gridstyle='')
-    mpf.plot(plot_df, type='candle', style=style, addplot=apd, 
+    # 使用简洁的 nightclouds 风格
+    mpf.plot(plot_df, type='candle', style='nightclouds', addplot=apd, 
              volume=True, savefig=buf, tight_layout=True)
-    
     buf.seek(0)
-    return base64.b64encode(buf.read()).decode('utf-8')
+    img_b64 = base64.b64encode(buf.read()).decode('utf-8')
+    
+    return img_b64, plot_df['Close'].iloc[-1]
 
-# ==========================================
-# 4. 发送 HTML 消息
-# ==========================================
-def send_sniper_msg(token, title, content_html):
-    url = "http://www.pushplus.plus/send"
-    payload = {
-        "token": token,
-        "title": title,
-        "content": content_html,
-        "template": "html"
-    }
-    return requests.post(url, json=payload).json()
-
-# ==========================================
-# 主逻辑
-# ==========================================
 if __name__ == "__main__":
     TOKEN = os.environ.get("PUSHPLUS_TOKEN")
-    # 这里可以读取环境变量中的 STOCK_LIST
+    # 这里可以填入你关注的股票，或者从环境变量读取
     watchlist = {"600600": "青岛啤酒", "600900": "长江电力"}
     
-    for code, name in watchlist.items():
-        print(f"🔍 正在处理: {name} ({code})")
-        try:
-            data = get_stock_data(code)
-            if data is not None:
-                img_b64 = generate_kline_img(data, name)
-                curr_p = data['Close'].iloc[-1]
+    if not TOKEN:
+        print("未找到 PUSHPLUS_TOKEN")
+    else:
+        for code, name in watchlist.items():
+            try:
+                print(f"处理 {name}...")
+                img_b64, curr_p = get_data_and_plot(code, name)
                 
-                # 构建 HTML 模板
-                html = f"""
-                <h3>🎯 狙击信号：{name} ({code})</h3>
-                <p>当前价格：<b>{curr_p}</b></p>
-                <img src="data:image/png;base64,{img_b64}" width="100%"/>
-                <p style="color:gray;font-size:12px;">自动监控系统于 {datetime.now().strftime('%H:%M')} 运行</p>
+                # 构建 HTML
+                html_content = f"""
+                <div style="font-family: sans-serif;">
+                    <h3 style="color: #333;">🎯 狙击信号：{name} ({code})</h3>
+                    <p>当前收盘价：<b>{curr_p}</b></p>
+                    <p style="color: #666;">近20日K线图（含MA5/10/20）：</p>
+                    <img src="data:image/png;base64,{img_b64}" style="width: 100%; max-width: 600px;"/>
+                </div>
                 """
                 
-                send_sniper_msg(TOKEN, f"狙击点提示：{name}", html)
-                print(f"✅ {name} 推送成功")
-            
-            # 重要：控制节奏，每只股票间隔 3-5 秒
-            time.sleep(random.uniform(3, 5))
-            
-        except Exception as e:
-            print(f"❌ 处理 {name} 出错: {e}")
+                # 发送
+                requests.post("http://www.pushplus.plus/send", json={
+                    "token": TOKEN,
+                    "title": f"狙击点提示：{name}",
+                    "content": html_content,
+                    "template": "html"
+                })
+                print(f"{name} 发送成功")
+                time.sleep(3) # 间隔一下，防止太频繁
+            except Exception as e:
+                print(f"{name} 出错: {e}")
