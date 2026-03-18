@@ -49,23 +49,24 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
       
-      - name: 暴力安装依赖 (跳过 Git 构建)
+      - name: 安装基础依赖 (稳定版)
         run: |
           python -m pip install --upgrade pip
-          
-          # 1. 强制安装基础库，固定 Pandas 版本避开 3.0
+          # 只安装最核心、绝对不会报错的库
           pip install pandas==2.2.2 numpy==1.26.4 requests akshare mplfinance
           
-          # 2. 暴力破解：直接从 GitHub 下载源码压缩包安装
-          # 这一步不需要 git clone，直接下载 zip 速度最快且最稳
-          pip install https://github.com/twopirllc/pandas-ta/archive/refs/heads/development.zip --no-deps
-          
-          # 3. 处理其他的 requirements.txt 冲突
-          if [ -f requirements.txt ]; then
-            sed -i '/pandas_ta/d' requirements.txt
+          # 如果有 requirements.txt，安装时跳过 pandas-ta
+          if [ -f requirements.txt ]; then 
             sed -i '/pandas-ta/d' requirements.txt
+            sed -i '/pandas_ta/d' requirements.txt
             pip install -r requirements.txt
           fi
+
+      - name: Run Sniper Alert
+        env:
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+          TZ: Asia/Shanghai
+        run: python src/sniper.py
       
       - name: 创建必要目录
         run: |
