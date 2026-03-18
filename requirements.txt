@@ -64,7 +64,11 @@ python-multipart>=0.0.6     # FastAPI File/Form upload support
 
 # ... 其他你原本就在用的库，比如 deepseek 或 gemini 相关库
 pandas
-pandas-ta
+# 删除原有的 pandas-ta，换成下面这行
+git+https://github.com/twopirllc/pandas-ta.git@development
+mplfinance
+akshare
+pandas==2.2.2
 mplfinance
 akshare
 requests
