@@ -64,7 +64,7 @@ python-multipart>=0.0.6     # FastAPI File/Form upload support
 
 # ... 其他你原本就在用的库，比如 deepseek 或 gemini 相关库
 pandas
-pandas_ta
+pandas-ta
 mplfinance
 akshare
 requests
