@@ -8,23 +8,25 @@ import pandas as pd
 import mplfinance as mpf
 import akshare as ak
 from datetime import datetime
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
-# 获取数据并生成K线图
+# 配置全局 Session 和重试策略
+session = requests.Session()
+retries = Retry(total=5, backoff_factor=1, status_forcelcelist=[500, 502, 503, 504])
+session.mount('http://', HTTPAdapter(max_retries=retries))
+session.mount('https://', HTTPAdapter(max_retries=retries))
+
 def get_data_and_plot(code, name):
-    # 获取 60 天历史数据
     df = ak.stock_zh_a_hist(symbol=code, period="daily", adjust="hfq").tail(60)
     df['date'] = pd.to_datetime(df['日期'])
     df = df.set_index('date')
     df = df.rename(columns={'开盘':'Open','最高':'High','最低':'Low','收盘':'Close','成交量':'Volume'})
-    
-    # 原生 Pandas 计算均线
     df['MA5'] = df['Close'].rolling(window=5).mean()
     df['MA10'] = df['Close'].rolling(window=10).mean()
     df['MA20'] = df['Close'].rolling(window=20).mean()
     
     plot_df = df.tail(20)
-    
-    # 配置均线层
     apd = [
         mpf.make_addplot(plot_df['MA5'], color='blue', width=0.8),
         mpf.make_addplot(plot_df['MA10'], color='orange', width=0.8),
@@ -32,54 +34,45 @@ def get_data_and_plot(code, name):
     ]
     
     buf = io.BytesIO()
-    mpf.plot(plot_df, type='candle', style='nightclouds', addplot=apd, 
-             volume=True, savefig=buf, tight_layout=True)
+    mpf.plot(plot_df, type='candle', style='nightclouds', addplot=apd, volume=True, savefig=buf, tight_layout=True)
     buf.seek(0)
-    img_b64 = base64.b64encode(buf.read()).decode('utf-8')
-    
-    return img_b64, plot_df['Close'].iloc[-1]
+    return base64.b64encode(buf.read()).decode('utf-8'), plot_df['Close'].iloc[-1]
 
 if __name__ == "__main__":
     TOKEN = os.environ.get("PUSHPLUS_TOKEN")
     watchlist = {"600600": "青岛啤酒", "600900": "长江电力"}
     
-    if not TOKEN:
-        print("❌ 未找到 PUSHPLUS_TOKEN")
-    else:
-        for code, name in watchlist.items():
-            # --- 核心改进：增加 3 次重试机制 ---
-            success = False
-            for attempt in range(3):
-                try:
-                    print(f"🔍 正在处理 {name} ({code})... (第 {attempt+1} 次尝试)")
-                    img_b64, curr_p = get_data_and_plot(code, name)
-                    
-                    html_content = f"""
-                    <div style="font-family: sans-serif;">
-                        <h3 style="color: #333;">🎯 狙击信号确认：{name} ({code})</h3>
-                        <p>当前价格：<b>{curr_p}</b></p>
-                        <img src="data:image/png;base64,{img_b64}" style="width: 100%; max-width: 600px; border: 1px solid #ddd;"/>
-                    </div>
-                    """
-                    
-                    # 发送请求
-                    resp = requests.post("http://www.pushplus.plus/send", json={
-                        "token": TOKEN,
-                        "title": f"📈 狙击提示：{name}",
-                        "content": html_content,
-                        "template": "html"
-                    }, timeout=30) # 增加超时时间到 30 秒
-                    
-                    print(f"✅ {name} 发送结果: {resp.json().get('msg')}")
+    # 尝试两个不同的 API 地址，哪个通走哪个
+    api_urls = ["http://www.pushplus.plus/send", "http://pushplus.plus/send"]
+    
+    for code, name in watchlist.items():
+        success = False
+        for attempt in range(5):  # 增加到 5 次尝试
+            try:
+                print(f"🔍 正在处理 {name}... (第 {attempt+1} 次尝试)")
+                img_b64, curr_p = get_data_and_plot(code, name)
+                
+                payload = {
+                    "token": TOKEN,
+                    "title": f"📈 狙击提示：{name}",
+                    "content": f"<h3>{name} ({code})</h3><p>价格: {curr_p}</p><img src='data:image/png;base64,{img_b64}' width='100%'/>",
+                    "template": "html"
+                }
+                
+                # 轮询地址发送
+                url = api_urls[attempt % len(api_urls)]
+                resp = session.post(url, json=payload, timeout=40)
+                
+                if resp.status_code == 200:
+                    print(f"✅ {name} 发送成功！")
                     success = True
-                    break # 成功后跳出重试循环
-                    
-                except Exception as e:
-                    print(f"⚠️ {name} 尝试失败: {e}")
-                    time.sleep(random.uniform(5, 10)) # 失败后多等一会儿再重试
-            
-            if not success:
-                print(f"❌ {name} 最终发送失败")
-            
-            # 每只股票之间固定休息一下，防止被反爬
-            time.sleep(random.uniform(3, 5))
+                    break
+            except Exception as e:
+                print(f"⚠️ {name} 尝试中报错: {e}")
+                wait_time = random.uniform(10, 20) # 报错后深呼吸，多等一会儿
+                time.sleep(wait_time)
+        
+        if not success:
+            print(f"❌ {name} 彻底失败，可能是网络封锁或 Token 错误。")
+        
+        time.sleep(random.uniform(5, 10)) # 每只股票之间拉开距离
